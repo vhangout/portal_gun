@@ -31,18 +31,23 @@ enum State {
   STATE_BLUE_FIRING,
   STATE_ORANGE_FIRING,
   STATE_POWERING_DOWN,
-  STATE_SONG_PLAYING
+  STATE_SONG_PLAYING,
+  STATE_SONG_IDLE,
+  STATE_SONG_END
 };
 State currentState = STATE_OFF;
 
-bool songPressed = false;
+bool playing = false;
 bool powerPressed = false;
+bool bluePressed = false;
+bool orangePressed = false;
+bool songPressed = false;
+
 bool idlePlaying = false;
 
 // === Антидребезг кнопок ===
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50; // мс
-
 bool lastPowerState = HIGH, lastBlueState = HIGH, lastOrangeState = HIGH, lastSongState = HIGH;
 bool stablePower = HIGH, stableBlue = HIGH, stableOrange = HIGH, stableSong = HIGH;
 
@@ -65,13 +70,13 @@ void setVolume(uint8_t vol) {
   sendJQCommand(cmd, sizeof(cmd));
 }
 
-void playSound(uint8_t track) {
+void playSound(uint8_t track) {  
   uint8_t cmd1[] = {0x7E, 0x03, 0x11, 0x04, 0xEF};
   sendJQCommand(cmd1, sizeof(cmd1));
-  delay(150);
+  delay(150);  
   uint8_t cmd[] = {0x7E, 0x04, 0x03, 0x00, track, 0xEF};
   sendJQCommand(cmd, sizeof(cmd));
-  delay(1000);
+  delay(500);
 }
 
 void playIdleSound() {
@@ -80,8 +85,14 @@ void playIdleSound() {
   delay(150);
   uint8_t cmd2[] = {0x7E, 0x04, 0x03, 0x00, SND_IDLE, 0xEF};
   sendJQCommand(cmd2, sizeof(cmd2));
-  delay(150);
+  delay(500);
   idlePlaying = true;
+}
+
+void pausePlay() {
+  uint8_t cmd[] = {0x7E, 0x02, 0x0E, 0xEF};
+  sendJQCommand(cmd, sizeof(cmd));
+  delay(500);
 }
 
 void setLightsState(int state) {
@@ -101,8 +112,31 @@ void setup() {
   jqInit();
 }
 
+bool downButton(bool btn, bool &trigger, State newState) {
+  if (btn && !trigger) {
+    trigger = true;
+    currentState = newState;
+    Serial.println(currentState);
+    return true;
+  }
+  return false;
+}
+
+void waitUpButton(bool btn, bool &trigger, uint8_t sound, State newState) {
+  if (!btn && trigger) {
+    trigger = false;
+    if (sound == 0)
+      pausePlay();
+    else
+      playSound(sound);
+  } else if (!trigger && !playing) {  //дожидаемся завершения звука
+    currentState = newState;
+    Serial.println(currentState);
+  }
+}
+
 void loop() {
-  bool playing = digitalRead(JQ_BUSY);
+  playing = digitalRead(JQ_BUSY);
 
   bool rawPower   = digitalRead(POWERSW);
   bool rawBlue    = digitalRead(BLUEBTN);
@@ -132,91 +166,56 @@ void loop() {
 
    // Используем только стабильные значения:
   bool powerOn       = stablePower == LOW;
-  bool bluePressed   = stableBlue == LOW;
-  bool orangePressed = stableOrange == LOW;
-  bool songBtn       = stableSong == LOW;
+  bool blueOn        = stableBlue == LOW;
+  bool orangeOn      = stableOrange == LOW;
+  bool songOn       = stableSong == LOW;
 
   switch (currentState) {
     case STATE_OFF:
-      if (powerOn && !powerPressed) {
-          powerPressed = 1;
-          currentState = STATE_POWERING_UP;
-          Serial.println("STATE_POWERING_UP");
-      }      
+      downButton(powerOn, powerPressed, STATE_POWERING_UP);      
       break;
 
     case STATE_POWERING_UP:
-      if (!powerOn && powerPressed) {
-        powerPressed = 0;
-        playSound(SND_POWER_UP);        
-      } else if (!powerPressed && !playing) {  //дожидаемся завершения звука
-          currentState = STATE_IDLE;
-          Serial.println("STATE_IDLE");
-      }
+      waitUpButton(powerOn, powerPressed, SND_POWER_UP, STATE_IDLE);      
       break;
 
     case STATE_IDLE:
-      if (powerOn && !powerPressed) {
-          powerPressed = true;
-          currentState = STATE_POWERING_DOWN;
-          Serial.println("STATE_POWERING_DOWN");
-      }
-      if (bluePressed) {        
-        currentState = STATE_BLUE_FIRING;
-        Serial.println("STATE_BLUE_FIRING");
-      } else if (orangePressed) {
-        playSound(SND_ORANGE_FIRE);
-        currentState = STATE_ORANGE_FIRING;
-        Serial.println("STATE_ORANGE_FIRING");
-      } else if (songBtn && !songPressed) {
-        playSound(SND_SONG);
-        songPressed = true;
-        currentState = STATE_SONG_PLAYING;
-        Serial.println("STATE_SONG_PLAYING");
-      } else if (!idlePlaying && !playing)
-        playIdleSound();      
+      if (downButton(powerOn, powerPressed, STATE_POWERING_DOWN))
+        break;
+      if (downButton(blueOn, bluePressed, STATE_BLUE_FIRING))
+        break;
+      if (downButton(orangeOn, orangePressed, STATE_ORANGE_FIRING))
+        break;
+      if (downButton(songOn, songPressed, STATE_SONG_PLAYING))
+        break;
+      // } else if (!idlePlaying && !playing)
+      //  playIdleSound();      
       break;
 
     case STATE_BLUE_FIRING:
-      setLightsState(1);
-      if (!bluePressed) {
-        currentState = STATE_IDLE;
-        Serial.println("STATE_IDLE");
-      }
-
-      if (!powerOn && powerPressed) {
-        powerPressed = 0;
-        playSound(SND_POWER_UP);        
-      } else if (!powerPressed && !playing) {  //дожидаемся завершения звука
-          currentState = STATE_IDLE;
-          Serial.println("STATE_IDLE");
-      }
-
+      waitUpButton(blueOn, bluePressed, SND_BLUE_FIRE, STATE_IDLE);
       break;
+      // setLightsState(1);      
 
     case STATE_ORANGE_FIRING:
-      setLightsState(0);
-      if (!orangePressed) {
-        currentState = STATE_IDLE;
-        Serial.println("STATE_IDLE");
-      }
+      waitUpButton(orangeOn, orangePressed, SND_ORANGE_FIRE, STATE_IDLE);
+      break;
+      // setLightsState(0);            
+
+    case STATE_SONG_PLAYING:      
+      waitUpButton(songOn, songPressed, SND_SONG, STATE_SONG_IDLE);
       break;
 
-    case STATE_SONG_PLAYING:
-      if (!songBtn && songPressed) {
-        songPressed = false;
-        currentState = STATE_IDLE;
-        Serial.println("STATE_IDLE");
-      }
+    case STATE_SONG_IDLE:
+      downButton(songOn, songPressed, STATE_SONG_END);
+      break;
+
+    case STATE_SONG_END:
+      waitUpButton(songOn, songPressed, 0, STATE_IDLE);
       break;
 
     case STATE_POWERING_DOWN:
-      if (!powerOn && powerPressed) {
-        powerPressed = false;
-        playSound(SND_POWER_DOWN);
-        currentState = STATE_OFF;
-        Serial.println("STATE_OFF");
-      }      
+      waitUpButton(powerOn, powerPressed, SND_POWER_DOWN, STATE_OFF);      
       break;
   }
 }
