@@ -37,16 +37,18 @@ enum State {
 };
 State currentState = STATE_OFF;
 
-unsigned long lastSoundTime = 0;
+unsigned long startSoundTime = 0;
 const unsigned long debounceSoundDelay = 500; // мс
 
-bool playing = false;
+//bool playing = false;
+bool soundPlaying = false;
+
 bool powerPressed = false;
 bool bluePressed = false;
 bool orangePressed = false;
 bool songPressed = false;
 
-bool idlePlaying = false;
+
 
 // === Антидребезг кнопок ===
 unsigned long lastDebounceTime = 0;
@@ -67,6 +69,12 @@ void jqInit() {
   delay(150);
 }
 
+void jqReset() {
+  uint8_t cmd[] = {0x7E, 0x02, 0x0C, 0xEF};
+  sendJQCommand(cmd, sizeof(cmd));
+  delay(500);
+}
+
 void setVolume(uint8_t vol) {
   if (vol > 30) vol = 30;
   uint8_t cmd[] = {0x7E, 0x03, 0x06, vol, 0xEF};
@@ -79,23 +87,30 @@ void playSound(uint8_t track) {
   delay(150);  
   uint8_t cmd[] = {0x7E, 0x04, 0x03, 0x00, track, 0xEF};
   sendJQCommand(cmd, sizeof(cmd));
-  lastSoundTime = millis();  
+  startSoundTime = millis();  
+  soundPlaying = true;
+  // playing = true;
 }
 
 void playIdleSound() {
-  uint8_t cmd1[] = {0x7E, 0x03, 0x11, 0x02, 0xEF};
+  Serial.println("play_idle");
+  Serial.println(soundPlaying);
+  uint8_t cmd1[] = {0x7E, 0x03, 0x11, 0x03, 0xEF};  
   sendJQCommand(cmd1, sizeof(cmd1));
   delay(150);
   uint8_t cmd2[] = {0x7E, 0x04, 0x03, 0x00, SND_IDLE, 0xEF};
-  sendJQCommand(cmd2, sizeof(cmd2));
-  lastSoundTime = millis();
-  idlePlaying = true;
+  sendJQCommand(cmd2, sizeof(cmd2)); 
+  startSoundTime = millis();
+  soundPlaying = true;
+  // playing = true;
 }
 
 void pausePlay() {
   uint8_t cmd[] = {0x7E, 0x02, 0x0E, 0xEF};
   sendJQCommand(cmd, sizeof(cmd));
-  lastSoundTime = millis();
+  startSoundTime = millis();
+  soundPlaying = false;  
+  // playing = false;
 }
 
 void setLightsState(int state) {
@@ -112,7 +127,8 @@ void setup() {
     pinMode(pin, INPUT_PULLUP);
   }
 
-  jqInit();
+  jqReset();
+  setVolume(30);
 }
 
 bool downButton(bool btn, bool &trigger, State newState) {
@@ -125,30 +141,29 @@ bool downButton(bool btn, bool &trigger, State newState) {
   return false;
 }
 
-void waitUpButton(bool btn, bool &trigger, uint8_t sound, State newState) {
+void waitUpButton(bool btn, bool &trigger, uint8_t sound, State newState) {  
   if (!btn && trigger) {
-    trigger = false;
+    trigger = false;    
     if (sound == 0)
       pausePlay();
     else
       playSound(sound);
-  } else if (!trigger && !playing) {  //дожидаемся завершения звука
+  } else if (!trigger && !playing && soundPlaying) {  //дожидаемся завершения звука
     currentState = newState;
     Serial.println(currentState);
-    idlePlaying = false;
+    soundPlaying = false;
   }
 }
 
 // сигнал Busy на плеере появляется не сразу
 void updatePlaying() {
   unsigned long now = millis();
-  if ((now - lastSoundTime) > debounceSoundDelay)
+  if ((now - startSoundTime) > debounceSoundDelay)
     playing = digitalRead(JQ_BUSY);
 }
 
 void loop() {
   updatePlaying();
-  // playing = digitalRead(JQ_BUSY);
 
   bool rawPower   = digitalRead(POWERSW);
   bool rawBlue    = digitalRead(BLUEBTN);
@@ -200,8 +215,8 @@ void loop() {
         break;
       if (downButton(songOn, songPressed, STATE_SONG_PLAYING))
         break;
-      // if (!idlePlaying && !playing)
-      //   playIdleSound();      
+      if (!soundPlaying)
+         playIdleSound();      
       break;
 
     case STATE_BLUE_FIRING:
@@ -223,7 +238,7 @@ void loop() {
       break;
 
     case STATE_SONG_END:
-      waitUpButton(songOn, songPressed, 0, STATE_IDLE);
+      waitUpButton(songOn, songPressed, 2, STATE_IDLE);
       break;
 
     case STATE_POWERING_DOWN:
